@@ -1,6 +1,6 @@
-# Employee Laptop Asset Tracking System
+# SecMindPro Employee Laptop Asset Tracking System
 
-A transparent asset-security system for **enrolled, company-owned Windows devices**. The visible Windows agent reports hostname, Windows-provided latitude/longitude, accuracy, and timestamps every five minutes to an authenticated HTTPS API. FastAPI stores reports in MongoDB Atlas. An authenticated Streamlit dashboard shows device status and Google Maps embeds.
+A transparent real-time asset-security and geolocation monitoring system for **enrolled, company-owned Windows devices**. The Windows agent reports hostname, high-accuracy Windows-provided latitude/longitude, accuracy radius, and timestamps **every 10 seconds** to an authenticated HTTPS API. FastAPI stores telemetry in MongoDB Atlas. An authenticated, live-streaming Streamlit SOC dashboard renders 3D fleet radars, real-time pinpoint satellite maps, movement speed analysis, and breadcrumb trails with continuous 10-second auto-refresh.
 
 ## Security and privacy design
 

@@ -26,7 +26,7 @@ try:
 except Exception:
     WINSDK_AVAILABLE = False
 
-INTERVAL_SECONDS = 300
+INTERVAL_SECONDS = int(os.getenv("REPORT_INTERVAL_SECONDS", "10"))
 DEFAULT_API_URL = os.getenv("API_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "http://127.0.0.1:8000"
 
 logging.basicConfig(
@@ -127,7 +127,14 @@ def load_config():
                     if not cfg.get(key):
                         raise ValueError(f"Missing '{key}' in {p}")
                 cfg["api_base_url"] = cfg["api_base_url"].rstrip("/")
-                logging.info("Loaded device configuration from: %s", p)
+
+                # If config points to localhost but .env provides an active remote URL, use remote URL
+                env_url = (os.getenv("API_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "").rstrip("/")
+                if env_url and ("127.0.0.1" in cfg["api_base_url"] or "localhost" in cfg["api_base_url"]) and ("127.0.0.1" not in env_url and "localhost" not in env_url):
+                    logging.info("Overriding localhost API url with environment API URL: %s", env_url)
+                    cfg["api_base_url"] = env_url
+
+                logging.info("Loaded device configuration from: %s (API: %s)", p, cfg["api_base_url"])
                 return cfg
             except Exception as e:
                 logging.warning("Failed to parse config at %s: %s", p, e)
@@ -172,18 +179,12 @@ def get_windows_location():
         raise RuntimeError("Windows Location SDK (winsdk) is not available on this machine.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(_query_windows_geolocator_sync)
-        return future.result(timeout=25.0)
+        return future.result(timeout=10.0)
 
 
 async def get_location():
     """Exclusively obtain accurate location from the Windows Built-in Location Service."""
     win_loc = await asyncio.to_thread(get_windows_location)
-    logging.info(
-        "Captured accurate Windows Location: Lat: %.6f, Lon: %.6f (Accuracy: ±%.1fm)",
-        win_loc["latitude"],
-        win_loc["longitude"],
-        win_loc["accuracy_meters"],
-    )
     return win_loc
 
 
@@ -197,7 +198,7 @@ def send_report(cfg, location):
         f'{cfg["api_base_url"]}/agent/report',
         json=payload,
         headers={"Authorization": f'Bearer {cfg["device_token"]}'},
-        timeout=20,
+        timeout=10,
     )
     response.raise_for_status()
     return response.json()
@@ -205,30 +206,39 @@ def send_report(cfg, location):
 
 async def main():
     cfg = load_config()
-    logging.info("==========================================")
-    logging.info("     OrgAssetAgent - Started Reporting     ")
-    logging.info("==========================================")
+    logging.info("==================================================")
+    logging.info("     OrgAssetAgent - Real-Time Tracking Engine    ")
+    logging.info("==================================================")
     logging.info("Device ID : %s", cfg["device_id"])
     logging.info("Hostname  : %s", socket.gethostname())
     logging.info("API URL   : %s", cfg["api_base_url"])
-    logging.info("Interval  : Every %s minutes", INTERVAL_SECONDS // 60)
+    logging.info("Interval  : Real-time sync every %s seconds", INTERVAL_SECONDS)
     logging.info("Press Ctrl+C to stop.")
 
+    seq = 0
     while True:
+        cycle_start = time.monotonic()
+        seq += 1
         try:
             location = await get_location()
+            t0 = time.monotonic()
             result = send_report(cfg, location)
+            lat_ms = (time.monotonic() - t0) * 1000
             logging.info(
-                "Report SUCCESS -> Lat: %.6f, Lon: %.6f, Accuracy: %.1fm (Dashboard updated at %s)",
+                "[Sync #%04d] SUCCESS -> Lat: %.6f, Lon: %.6f (±%.1fm) | Ping: %.0fms | Server Time: %s",
+                seq,
                 location["latitude"],
                 location["longitude"],
                 location["accuracy_meters"],
+                lat_ms,
                 result.get("received_at", "ok"),
             )
         except Exception as exc:
-            logging.error("Report failed: %s", exc)
+            logging.error("[Sync #%04d] Report cycle failed: %s", seq, exc)
 
-        await asyncio.sleep(INTERVAL_SECONDS)
+        elapsed = time.monotonic() - cycle_start
+        sleep_duration = max(0.5, INTERVAL_SECONDS - elapsed)
+        await asyncio.sleep(sleep_duration)
 
 
 if __name__ == "__main__":
