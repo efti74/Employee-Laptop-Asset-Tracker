@@ -151,16 +151,17 @@ def _query_windows_geolocator_sync():
             locator.desired_accuracy = PositionAccuracy.HIGH
         locator.desired_accuracy_in_meters = 10
 
+        # Give Windows up to 12 seconds to perform Wi-Fi / cell scan
         pos = loop.run_until_complete(locator.get_geoposition_async())
         coord = pos.coordinate
         point = coord.point.position
         return {
             "latitude": float(point.latitude),
             "longitude": float(point.longitude),
-            "accuracy_meters": float(coord.accuracy or 10.0),
+            "accuracy_meters": float(coord.accuracy or 50.0),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-    except Exception:
+    except Exception as e:
         return None
     finally:
         loop.close()
@@ -173,7 +174,7 @@ def get_windows_location():
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_query_windows_geolocator_sync)
-            return future.result(timeout=6.0)
+            return future.result(timeout=14.0)
     except Exception:
         return None
 
