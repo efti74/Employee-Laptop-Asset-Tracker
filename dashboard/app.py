@@ -188,15 +188,31 @@ def haversine_distance_meters(lat1: float, lon1: float, lat2: float, lon2: float
     return R * c
 
 
-def parse_iso_datetime(dt_str: Optional[str]) -> Optional[datetime]:
-    if not dt_str:
+def parse_iso_datetime(dt_val) -> Optional[datetime]:
+    if dt_val is None:
         return None
+    if isinstance(dt_val, datetime):
+        if dt_val.tzinfo is None:
+            return dt_val.replace(tzinfo=timezone.utc)
+        return dt_val
     try:
+        dt_str = str(dt_val).strip()
+        if not dt_str or dt_str.lower() in ("none", "nat", "null", "nan", ""):
+            return None
         if dt_str.endswith("Z"):
             dt_str = dt_str[:-1] + "+00:00"
-        return datetime.fromisoformat(dt_str)
+        parsed = datetime.fromisoformat(dt_str)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
     except Exception:
-        return None
+        try:
+            ts = pd.to_datetime(dt_val, utc=True, errors="coerce", format="mixed")
+            if pd.isna(ts):
+                return None
+            return ts.to_pydatetime()
+        except Exception:
+            return None
 
 
 def get_device_status_info(last_seen_str: Optional[str]) -> Tuple[str, str, str, float]:
@@ -617,52 +633,64 @@ def render_realtime_dashboard():
 
             if history:
                 df_hist = pd.DataFrame(history)
-                # Ensure ordered chronologically for path
-                df_hist["rec_dt"] = pd.to_datetime(df_hist["recorded_at"])
-                df_hist = df_hist.sort_values(by="rec_dt", ascending=True).reset_index(drop=True)
+                # Robustly convert timestamp column to datetime across all pandas versions
+                time_col = "recorded_at" if "recorded_at" in df_hist.columns else "received_at"
+                df_hist["rec_dt"] = pd.to_datetime(df_hist[time_col].astype(str), utc=True, errors="coerce", format="mixed")
+                
+                # Convert coordinates and accuracy to numeric and drop invalid points
+                df_hist["latitude"] = pd.to_numeric(df_hist["latitude"], errors="coerce")
+                df_hist["longitude"] = pd.to_numeric(df_hist["longitude"], errors="coerce")
+                if "accuracy_meters" in df_hist.columns:
+                    df_hist["accuracy_meters"] = pd.to_numeric(df_hist["accuracy_meters"], errors="coerce").fillna(10.0)
+                else:
+                    df_hist["accuracy_meters"] = 10.0
 
-                # Coordinates list for path
-                path_coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in df_hist.iterrows()]
+                df_hist = df_hist.dropna(subset=["latitude", "longitude"]).sort_values(by="rec_dt", ascending=True).reset_index(drop=True)
 
-                path_data = [{"path": path_coords, "name": b_dev.get("hostname", "Asset")}]
+                if not df_hist.empty:
+                    # Coordinates list for path
+                    path_coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in df_hist.iterrows()]
+                    path_data = [{"path": path_coords, "name": b_dev.get("hostname", "Asset")}]
 
-                path_layer = pdk.Layer(
-                    "PathLayer",
-                    data=path_data,
-                    get_path="path",
-                    get_color=[56, 189, 248, 240],
-                    width_scale=20,
-                    width_min_pixels=3,
-                    pickable=True,
-                )
+                    path_layer = pdk.Layer(
+                        "PathLayer",
+                        data=path_data,
+                        get_path="path",
+                        get_color=[56, 189, 248, 240],
+                        width_scale=20,
+                        width_min_pixels=3,
+                        pickable=True,
+                    )
 
-                points_layer = pdk.Layer(
-                    "ScatterplotLayer",
-                    data=df_hist,
-                    get_position="[longitude, latitude]",
-                    get_fill_color=[16, 185, 129, 200],
-                    get_radius=15,
-                    radius_min_pixels=4,
-                    radius_max_pixels=12,
-                    pickable=True,
-                )
+                    points_layer = pdk.Layer(
+                        "ScatterplotLayer",
+                        data=df_hist,
+                        get_position="[longitude, latitude]",
+                        get_fill_color=[16, 185, 129, 200],
+                        get_radius=15,
+                        radius_min_pixels=4,
+                        radius_max_pixels=12,
+                        pickable=True,
+                    )
 
-                last_pt = path_coords[-1] if path_coords else [0, 0]
-                view_st = pdk.ViewState(
-                    latitude=last_pt[1],
-                    longitude=last_pt[0],
-                    zoom=map_zoom_level,
-                    pitch=20,
-                )
+                    last_pt = path_coords[-1] if path_coords else [0, 0]
+                    view_st = pdk.ViewState(
+                        latitude=last_pt[1],
+                        longitude=last_pt[0],
+                        zoom=map_zoom_level,
+                        pitch=20,
+                    )
 
-                b_deck = pdk.Deck(
-                    layers=[path_layer, points_layer],
-                    initial_view_state=view_st,
-                    map_style="mapbox://styles/mapbox/dark-v11",
-                    tooltip={"text": "Recorded At: {recorded_at}\nLat: {latitude}, Lon: {longitude}\nAccuracy: ±{accuracy_meters}m"},
-                )
+                    b_deck = pdk.Deck(
+                        layers=[path_layer, points_layer],
+                        initial_view_state=view_st,
+                        map_style="mapbox://styles/mapbox/dark-v11",
+                        tooltip={"text": "Recorded At: {recorded_at}\nLat: {latitude}, Lon: {longitude}\nAccuracy: ±{accuracy_meters}m"},
+                    )
 
-                st.pydeck_chart(b_deck, use_container_width=True)
+                    st.pydeck_chart(b_deck, use_container_width=True)
+                else:
+                    st.info("No valid GPS coordinate history recorded for this asset yet.")
 
                 st.markdown("#### 📜 Chronological Ingestion Log")
                 display_cols = ["recorded_at", "received_at", "latitude", "longitude", "accuracy_meters", "hostname"]
