@@ -253,153 +253,392 @@ def format_relative_time(seconds: float) -> str:
     return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m ago"
 
 
-# ---------------------------------------------------------
-# High-Tech Interactive Leaflet Map Generators
-# ---------------------------------------------------------
-def render_leaflet_fleet_map(devices_data: List[dict], height: int = 520):
+def fetch_all_ingested_reports(active_devices: List[dict], max_per_device: int = 150) -> List[dict]:
     """
-    Renders an interactive high-tech Leaflet map with OpenStreetMap,
-    Carto Dark, and Satellite basemaps, live pulsing markers, and accuracy circles.
+    Fetches all ingested location telemetry reports across all active devices.
+    Tries single fleet query first, then falls back to concurrent queries per device.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    # 1. Attempt fleet-wide query
+    try:
+        data = api_get("/admin/reports", params={"limit": 1000})
+        if isinstance(data, list) and data:
+            return data
+    except Exception:
+        pass
+
+    # 2. Fallback: concurrent per-device fetch
+    reports_list = []
+
+    def _fetch_dev(d):
+        try:
+            return api_get("/admin/reports", params={"device_id": d["device_id"], "limit": max_per_device})
+        except Exception:
+            return []
+
+    if active_devices:
+        with ThreadPoolExecutor(max_workers=min(len(active_devices), 8)) as executor:
+            results = executor.map(_fetch_dev, active_devices)
+            for res in results:
+                if isinstance(res, list):
+                    reports_list.extend(res)
+
+    return reports_list
+
+
+# ---------------------------------------------------------
+# High-Tech Interactive SOC Clustered Geolocation Map
+# ---------------------------------------------------------
+def render_leaflet_fleet_map(devices_data: List[dict], height: int = 560):
+    """
+    Renders an interactive Security Operations Center (SOC) style fleet geolocation map:
+    - High-contrast dark cyber world canvas (Esri World Dark Gray Base + Reference, 100% free)
+    - Clustered locations showing nearby ingested coordinates with circular teal/cyan badges
+    - Smooth expansion and spiderfication upon zooming in
+    - Interactive dark inspection cards with direct Google Maps deep link
     """
     if not devices_data:
         st.warning("No coordinates available to plot on map.")
         return
 
-    markers_js = []
-    for d in devices_data:
-        lat = d["latitude"]
-        lon = d["longitude"]
-        hostname = d["hostname"]
-        asset_tag = d["asset_tag"]
-        status = d["status"]
-        last_seen = d["last_seen_str"]
-        accuracy = d["accuracy"]
-        pos_source = d.get("position_source", "Wi-Fi Triangulation")
+    devices_json = json.dumps(devices_data)
 
-        if status == "Live Online":
-            pin_color = "#10b981"
-        elif status == "Recent":
-            pin_color = "#f59e0b"
-        else:
-            pin_color = "#ef4444"
+    html_template = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body, #fleet_map {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background: #0f172a;
+            border-radius: 12px;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+        }
 
-        popup_html = f"""
-        <div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 190px; color: #0f172a;'>
-            <div style='font-weight: 700; font-size: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;'>
-                💻 {hostname}
-            </div>
-            <div><b>Asset Tag:</b> {asset_tag}</div>
-            <div><b>Status:</b> <span style='color:{pin_color}; font-weight:600;'>{status}</span> ({last_seen})</div>
-            <div><b>Coordinates:</b> {lat:.6f}, {lon:.6f}</div>
-            <div><b>Accuracy:</b> ±{accuracy:.1f}m</div>
-            <div><b>Source:</b> {pos_source}</div>
-            <div style='margin-top: 8px;'>
-                <a href='https://www.google.com/maps?q={lat},{lon}' target='_blank' style='color:#0284c7; text-decoration:none; font-weight:600;'>Open in Google Maps ↗</a>
-            </div>
-        </div>
-        """
+        /* Clustered Badges - Matching SOC Reference Cyber Theme */
+        .soc-cluster-wrapper, .soc-single-wrapper {
+            background: transparent !important;
+            border: none !important;
+        }
+        .soc-cluster-badge {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #00acc1 0%, #00838f 100%);
+            border: 2px solid #22d3ee;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 13px;
+            box-shadow: 0 0 14px rgba(6, 182, 212, 0.75), inset 0 1px 2px rgba(255, 255, 255, 0.5);
+            cursor: pointer;
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s ease;
+        }
+        .soc-cluster-badge:hover {
+            transform: scale(1.15);
+            box-shadow: 0 0 22px rgba(0, 229, 255, 0.95);
+            border-color: #ffffff;
+        }
+        .soc-cluster-small {
+            font-size: 12px;
+        }
+        .soc-cluster-medium {
+            font-size: 13.5px;
+            border-width: 2.5px;
+            box-shadow: 0 0 18px rgba(6, 182, 212, 0.85);
+        }
+        .soc-cluster-large {
+            font-size: 15px;
+            border-width: 3px;
+            box-shadow: 0 0 24px rgba(6, 182, 212, 0.95);
+        }
 
-        markers_js.append(f"""
-        (function() {{
-            var lat = {lat};
-            var lon = {lon};
-            var marker = L.circleMarker([lat, lon], {{
-                radius: 10,
-                fillColor: '{pin_color}',
-                color: '#ffffff',
-                weight: 2.5,
-                opacity: 1,
-                fillOpacity: 0.95
-            }}).addTo(map);
+        /* Single Marker Pin */
+        .soc-single-pin {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #00acc1 0%, #00838f 100%);
+            border: 2px solid #22d3ee;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 11px;
+            box-shadow: 0 0 12px rgba(0, 188, 212, 0.7);
+            cursor: pointer;
+            position: relative;
+            transition: transform 0.2s ease;
+        }
+        .soc-single-pin:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 20px rgba(0, 229, 255, 1);
+            border-color: #ffffff;
+        }
+        .soc-single-pin.live {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            border-color: #34d399;
+            box-shadow: 0 0 14px rgba(16, 185, 129, 0.8);
+        }
+        .soc-single-pin.recent {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            border-color: #fbbf24;
+            box-shadow: 0 0 14px rgba(245, 158, 11, 0.8);
+        }
+        .soc-single-pin.offline {
+            background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+            border-color: #f87171;
+            box-shadow: 0 0 14px rgba(239, 68, 68, 0.8);
+        }
 
-            var circle = L.circle([lat, lon], {{
-                radius: {max(accuracy, 15.0)},
-                color: '{pin_color}',
-                weight: 1,
-                opacity: 0.7,
-                fillColor: '{pin_color}',
-                fillOpacity: 0.12
-            }}).addTo(map);
+        .soc-pin-pulse {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 2px solid #22d3ee;
+            animation: soc-radar-pulse 2.2s infinite;
+            pointer-events: none;
+        }
+        @keyframes soc-radar-pulse {
+            0% { transform: scale(1); opacity: 0.9; }
+            100% { transform: scale(2.4); opacity: 0; }
+        }
 
-            marker.bindPopup(`{popup_html}`);
+        /* Tooltip & Popups */
+        .leaflet-popup-content-wrapper {
+            background: rgba(15, 23, 42, 0.96) !important;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(56, 189, 248, 0.35) !important;
+            border-radius: 10px !important;
+            box-shadow: 0 16px 32px rgba(0, 0, 0, 0.6) !important;
+            color: #f1f5f9 !important;
+            padding: 0 !important;
+        }
+        .leaflet-popup-tip {
+            background: #0f172a !important;
+        }
+        .leaflet-popup-content {
+            margin: 12px 14px !important;
+            line-height: 1.4 !important;
+        }
+        .soc-popup-card {
+            min-width: 220px;
+            font-size: 12px;
+        }
+        .soc-popup-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            padding-bottom: 6px;
+            margin-bottom: 8px;
+        }
+        .soc-hostname {
+            font-weight: 700;
+            font-size: 13.5px;
+            color: #ffffff;
+            flex-grow: 1;
+        }
+        .soc-status-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 7px;
+            border-radius: 12px;
+        }
+        .soc-status-badge.live { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); }
+        .soc-status-badge.recent { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+        .soc-status-badge.offline { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+
+        .soc-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        .soc-label { color: #94a3b8; }
+        .soc-val { color: #e2e8f0; font-weight: 500; }
+        .soc-val.mono { font-family: monospace; color: #38bdf8; }
+        .soc-popup-footer {
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            margin-top: 8px;
+            padding-top: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .soc-maps-link {
+            color: #38bdf8;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 11px;
+        }
+        .soc-maps-link:hover {
+            text-decoration: underline;
+            color: #7dd3fc;
+        }
+
+        .leaflet-control-layers {
+            background: rgba(15, 23, 42, 0.92) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            border-radius: 8px !important;
+            color: #e2e8f0 !important;
+            font-size: 11.5px !important;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.5) !important;
+        }
+        .leaflet-control-layers label { color: #e2e8f0 !important; cursor: pointer; }
+        .leaflet-bar a {
+            background-color: #1e293b !important;
+            color: #f1f5f9 !important;
+            border-bottom: 1px solid #334155 !important;
+        }
+        .leaflet-bar a:hover {
+            background-color: #334155 !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="fleet_map"></div>
+    <script>
+        // 100% Free, Keyless, Unwatermarked Basemaps
+        var esriDarkBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 16,
+            attribution: '&copy; Esri &bull; OpenStreetMap'
+        });
+        var esriDarkRef = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 16
+        });
+        var cyberDark = L.layerGroup([esriDarkBase, esriDarkRef]);
+
+        var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+        });
+        var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 19,
+            attribution: '&copy; Esri World Imagery'
+        });
+
+        var map = L.map('fleet_map', {
+            center: [22.34, 91.80],
+            zoom: 12,
+            layers: [cyberDark]
+        });
+
+        var baseMaps = {
+            "🌌 Cyber Dark SOC (Default)": cyberDark,
+            "🗺️ OpenStreetMap": osm,
+            "🛰️ High-Res Satellite": satellite
+        };
+        L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
+
+        var markers = L.markerClusterGroup({
+            showCoverageOnHover: false,
+            zoomToBoundsOnClick: true,
+            spiderfyOnMaxZoom: true,
+            maxClusterRadius: 55,
+            iconCreateFunction: function(cluster) {
+                var count = cluster.getChildCount();
+                var cClass = 'soc-cluster-small';
+                var size = 34;
+                if (count >= 10 && count < 50) {
+                    cClass = 'soc-cluster-medium';
+                    size = 42;
+                } else if (count >= 50) {
+                    cClass = 'soc-cluster-large';
+                    size = 50;
+                }
+                return L.divIcon({
+                    html: '<div class="soc-cluster-badge ' + cClass + '"><span>' + count + '</span></div>',
+                    className: 'soc-cluster-wrapper',
+                    iconSize: [size, size],
+                    iconAnchor: [size / 2, size / 2]
+                });
+            }
+        });
+
+        var items = %ITEMS_JSON%;
+        var bounds = [];
+
+        items.forEach(function(d) {
+            var lat = d.latitude;
+            var lon = d.longitude;
+            var hostname = d.hostname || 'Unknown';
+            var assetTag = d.asset_tag || 'N/A';
+            var devId = d.device_id || '';
+            var status = d.status || 'Offline';
+            var lastSeen = d.last_seen_str || 'N/A';
+            var acc = d.accuracy || 10.0;
+            var source = d.position_source || 'Wi-Fi / WPS';
+
+            var sClass = 'offline';
+            if (status === 'Live Online') sClass = 'live';
+            else if (status === 'Recent') sClass = 'recent';
+
+            var singleIcon = L.divIcon({
+                html: '<div class="soc-single-pin ' + sClass + '"><span>1</span>' + (sClass === 'live' ? '<div class="soc-pin-pulse"></div>' : '') + '</div>',
+                className: 'soc-single-wrapper',
+                iconSize: [30, 30],
+                iconAnchor: [15, 15]
+            });
+
+            var marker = L.marker([lat, lon], { icon: singleIcon });
+
+            var popupContent = `
+                <div class="soc-popup-card">
+                    <div class="soc-popup-header">
+                        <span style="font-size:16px;">💻</span>
+                        <span class="soc-hostname">${hostname}</span>
+                        <span class="soc-status-badge ${sClass}">${status}</span>
+                    </div>
+                    <div class="soc-popup-body">
+                        <div class="soc-row"><span class="soc-label">Asset Tag:</span> <span class="soc-val">${assetTag}</span></div>
+                        ${devId ? `<div class="soc-row"><span class="soc-label">Device ID:</span> <span class="soc-val"><code>${devId}</code></span></div>` : ''}
+                        <div class="soc-row"><span class="soc-label">Coordinates:</span> <span class="soc-val mono">${lat.toFixed(6)}, ${lon.toFixed(6)}</span></div>
+                        <div class="soc-row"><span class="soc-label">Accuracy:</span> <span class="soc-val">±${acc.toFixed(1)}m</span></div>
+                        <div class="soc-row"><span class="soc-label">Source:</span> <span class="soc-val">${source}</span></div>
+                        <div class="soc-row"><span class="soc-label">Ingested:</span> <span class="soc-val">${lastSeen}</span></div>
+                    </div>
+                    <div class="soc-popup-footer">
+                        <span style="font-size:10px; color:#64748b;">SecMindPro Radar</span>
+                        <a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" class="soc-maps-link">
+                            Open in Google Maps ↗
+                        </a>
+                    </div>
+                </div>
+            `;
+            marker.bindPopup(popupContent);
+            markers.addLayer(marker);
             bounds.push([lat, lon]);
-        }})();
-        """)
+        });
 
-    markers_script = "\n".join(markers_js)
+        map.addLayer(markers);
 
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-            html, body, #fleet_map {{
-                width: 100%;
-                height: 100%;
-                margin: 0;
-                padding: 0;
-                background: #0f172a;
-                border-radius: 12px;
-            }}
-            .leaflet-popup-content-wrapper {{
-                border-radius: 8px;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.25);
-            }}
-            .leaflet-control-layers {{
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                font-family: sans-serif;
-                font-size: 12px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="fleet_map"></div>
-        <script>
-            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                maxZoom: 19,
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'
-            }});
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
-                maxZoom: 19,
-                attribution: '&copy; Esri World Imagery'
-            }});
-            var osmHot = L.tileLayer('https://{{s}}.tile.openstreetmap.fr/hot/{{z}}/{{x}}/{{y}}.png', {{
-                maxZoom: 19,
-                attribution: '&copy; OpenStreetMap contributors, Humanitarian style'
-            }});
+        if (bounds.length > 0) {
+            if (bounds.length === 1) {
+                map.setView(bounds[0], 14);
+            } else {
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+            }
+        }
+    </script>
+</body>
+</html>"""
 
-            var map = L.map('fleet_map', {{
-                center: [{devices_data[0]['latitude']}, {devices_data[0]['longitude']}],
-                zoom: 15,
-                layers: [osm]
-            }});
-
-            var baseMaps = {{
-                "🗺️ OpenStreetMap (Standard)": osm,
-                "🛰️ High-Res Satellite (Esri)": satellite,
-                "🏙️ Detailed Streets (OSM Hot)": osmHot
-            }};
-            L.control.layers(baseMaps).addTo(map);
-
-            var bounds = [];
-            {markers_script}
-
-            if (bounds.length > 0) {{
-                if (bounds.length === 1) {{
-                    map.setView(bounds[0], 16);
-                }} else {{
-                    map.fitBounds(bounds, {{ padding: [50, 50], maxZoom: 16 }});
-                }}
-            }}
-        </script>
-    </body>
-    </html>
-    """
+    html_content = html_template.replace("%ITEMS_JSON%", devices_json)
     components.html(html_content, height=height, scrolling=False)
 
 
@@ -428,82 +667,97 @@ def render_leaflet_breadcrumb_map(df_hist: pd.DataFrame, hostname: str, height: 
     lat_center = points[-1]["lat"]
     lon_center = points[-1]["lon"]
 
-    html_code = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-            html, body, #bmap {{
-                width: 100%;
-                height: 100%;
-                margin: 0;
-                padding: 0;
-                background: #0f172a;
-                border-radius: 12px;
-            }}
-            .leaflet-popup-content-wrapper {{
-                border-radius: 8px;
-                font-family: sans-serif;
-            }}
-            .leaflet-control-layers {{
-                border-radius: 8px;
-                font-family: sans-serif;
-                font-size: 12px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="bmap"></div>
-        <script>
-            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>' }});
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{ maxZoom: 19, attribution: '&copy; Esri World Imagery' }});
+    html_template = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        html, body, #bmap {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background: #0f172a;
+            border-radius: 12px;
+        }
+        .leaflet-popup-content-wrapper {
+            background: rgba(15, 23, 42, 0.95);
+            color: #f1f5f9;
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+        }
+        .leaflet-popup-tip { background: #0f172a; }
+        .leaflet-control-layers {
+            background: rgba(15, 23, 42, 0.9);
+            color: #e2e8f0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            font-family: sans-serif;
+            font-size: 12px;
+        }
+        .leaflet-control-layers label { color: #e2e8f0; }
+    </style>
+</head>
+<body>
+    <div id="bmap"></div>
+    <script>
+        var esriDarkBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16, attribution: '&copy; Esri &bull; OpenStreetMap' });
+        var esriDarkRef = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16 });
+        var cyberDark = L.layerGroup([esriDarkBase, esriDarkRef]);
+        var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>' });
+        var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: '&copy; Esri World Imagery' });
 
-            var map = L.map('bmap', {{ center: [{lat_center}, {lon_center}], zoom: 16, layers: [osm] }});
-            L.control.layers({{ "🗺️ Street Map (OSM)": osm, "🛰️ High-Res Satellite (Esri)": satellite }}).addTo(map);
+        var map = L.map('bmap', { center: [%LAT_CENTER%, %LON_CENTER%], zoom: 16, layers: [cyberDark] });
+        L.control.layers({ "🌌 Cyber Dark SOC": cyberDark, "🗺️ Street Map (OSM)": osm, "🛰️ High-Res Satellite (Esri)": satellite }).addTo(map);
 
-            var rawPoints = {points_json};
-            var latlngs = [];
+        var rawPoints = %POINTS_JSON%;
+        var latlngs = [];
 
-            rawPoints.forEach(function(pt, i) {{
-                var isLatest = (i === rawPoints.length - 1);
-                var isFirst = (i === 0);
-                latlngs.push([pt.lat, pt.lon]);
+        rawPoints.forEach(function(pt, i) {
+            var isLatest = (i === rawPoints.length - 1);
+            var isFirst = (i === 0);
+            latlngs.push([pt.lat, pt.lon]);
 
-                var color = isLatest ? '#38bdf8' : (isFirst ? '#94a3b8' : '#10b981');
-                var radius = isLatest ? 10 : 6;
+            var color = isLatest ? '#38bdf8' : (isFirst ? '#94a3b8' : '#10b981');
+            var radius = isLatest ? 10 : 6;
 
-                var marker = L.circleMarker([pt.lat, pt.lon], {{
-                    radius: radius,
-                    fillColor: color,
-                    color: '#ffffff',
-                    weight: isLatest ? 3 : 1.5,
-                    fillOpacity: 0.95
-                }}).addTo(map);
+            var marker = L.circleMarker([pt.lat, pt.lon], {
+                radius: radius,
+                fillColor: color,
+                color: '#ffffff',
+                weight: isLatest ? 3 : 1.5,
+                fillOpacity: 0.95
+            }).addTo(map);
 
-                marker.bindPopup(`
-                    <div style='font-size:12px;'>
-                        <b>Waypoint #${{pt.idx}}</b> ${{isLatest ? '🟢 (Latest Fix)' : ''}}<br/>
-                        <b>Time:</b> ${{pt.time}}<br/>
-                        <b>Lat/Lon:</b> ${{pt.lat.toFixed(6)}}, ${{pt.lon.toFixed(6)}}<br/>
-                        <b>Accuracy:</b> ±${{pt.accuracy.toFixed(1)}}m
-                    </div>
-                `);
-            }});
+            marker.bindPopup(`
+                <div style='font-size:12px; line-height:1.4;'>
+                    <b style='color:#38bdf8;'>Waypoint #${pt.idx}</b> ${isLatest ? '🟢 <span style="color:#34d399;">(Latest Fix)</span>' : ''}<br/>
+                    <b>Time:</b> ${pt.time}<br/>
+                    <b>Coordinates:</b> ${pt.lat.toFixed(6)}, ${pt.lon.toFixed(6)}<br/>
+                    <b>Accuracy:</b> ±${pt.accuracy.toFixed(1)}m
+                </div>
+            `);
+        });
 
-            if (latlngs.length > 1) {{
-                var polyline = L.polyline(latlngs, {{ color: '#0ea5e9', weight: 4, opacity: 0.85, dashArray: '6, 8' }}).addTo(map);
-                map.fitBounds(polyline.getBounds(), {{ padding: [40, 40], maxZoom: 17 }});
-            }} else if (latlngs.length === 1) {{
-                map.setView(latlngs[0], 16);
-            }}
-        </script>
-    </body>
-    </html>
-    """
+        if (latlngs.length > 1) {
+            var polyline = L.polyline(latlngs, { color: '#0ea5e9', weight: 4, opacity: 0.85, dashArray: '6, 8' }).addTo(map);
+            map.fitBounds(polyline.getBounds(), { padding: [40, 40], maxZoom: 17 });
+        } else if (latlngs.length === 1) {
+            map.setView(latlngs[0], 16);
+        }
+    </script>
+</body>
+</html>"""
+
+    html_code = (
+        html_template.replace("%POINTS_JSON%", points_json)
+        .replace("%LAT_CENTER%", str(lat_center))
+        .replace("%LON_CENTER%", str(lon_center))
+    )
     components.html(html_code, height=height, scrolling=False)
 
 
@@ -536,8 +790,8 @@ with st.sidebar:
     map_engine = st.radio(
         "Map Display Radar",
         options=[
-            "🌍 Google Maps Public Embed (Zero API Key • Satellite & Roads)",
-            "🛰️ Multi-Device Fleet Radar (OpenStreetMap & Satellite)",
+            "🌌 SOC Cyber Fleet Radar (Clustered Dark Canvas • Zero API Key)",
+            "🌍 Google Maps Public Embed (Single Asset Street View)",
         ],
         index=0,
     )
@@ -635,38 +889,131 @@ def render_realtime_dashboard():
     # ---------------------------------------------------------
     with tab_fleet:
         st.subheader("🌐 Global Asset Fleet Radar")
-        st.caption("Real-time locations of all enrolled devices with color-coded live heartbeat indicators.")
+        st.caption("High-contrast SOC fleet geolocation with clustered telemetry markers, proximity aggregation, and deep inspection.")
 
+        # Data Scope Selector & Filter Controls
+        f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
+        with f_col1:
+            radar_scope = st.radio(
+                "Telemetry Data Scope:",
+                options=[
+                    "🛰️ All Ingested Telemetry Locations (Fleet History)",
+                    "💻 Latest Active Asset Locations Only",
+                ],
+                horizontal=True,
+                key="fleet_radar_scope",
+            )
+        with f_col2:
+            status_filter = st.selectbox(
+                "Filter Status:",
+                options=["All Statuses", "Live Online", "Recent", "Offline"],
+                index=0,
+                key="fleet_status_filter",
+            )
+        with f_col3:
+            source_filter = st.selectbox(
+                "Position Source:",
+                options=["All Sources", "Wi-Fi Triangulation", "Public IP", "Windows Location"],
+                index=0,
+                key="fleet_source_filter",
+            )
+
+        # Build map dataset based on scope
         map_data = []
-        for d in active_devices:
-            latest = d.get("latest_report")
-            if latest and latest.get("latitude") is not None and latest.get("longitude") is not None:
-                last_seen = latest.get("received_at") or d.get("last_seen_at")
-                status_label, _, _, sec_ago = get_device_status_info(last_seen)
+        dev_lookup = {d["device_id"]: d for d in active_devices}
 
-                # Color coding: Green for live, Amber for recent, Red for offline
-                if status_label == "Live Online":
-                    color = [16, 185, 129, 220]  # Emerald
-                elif status_label == "Recent":
-                    color = [245, 158, 11, 220]  # Amber
-                else:
-                    color = [239, 68, 68, 220]   # Red
+        if radar_scope.startswith("🛰️"):
+            # Fetch all ingested location reports across fleet
+            raw_reports = fetch_all_ingested_reports(active_devices, max_per_device=200)
+
+            for rep in raw_reports:
+                lat = rep.get("latitude")
+                lon = rep.get("longitude")
+                if lat is None or lon is None:
+                    continue
+                try:
+                    lat = float(lat)
+                    lon = float(lon)
+                except (ValueError, TypeError):
+                    continue
+
+                dev_id = rep.get("device_id", "")
+                d_meta = dev_lookup.get(dev_id, {})
+                hostname = rep.get("hostname") or d_meta.get("hostname", "Unknown")
+                asset_tag = d_meta.get("asset_tag") or hostname
+                rec_time = rep.get("received_at") or rep.get("recorded_at")
+                status_label, _, _, sec_ago = get_device_status_info(rec_time)
+                accuracy = float(rep.get("accuracy_meters", 10.0))
+                pos_source = rep.get("position_source", "Wi-Fi Triangulation (WPS)")
+
+                # Apply Filters
+                if status_filter != "All Statuses" and status_label != status_filter:
+                    continue
+                if source_filter != "All Sources" and source_filter.lower() not in pos_source.lower():
+                    continue
 
                 map_data.append({
-                    "hostname": d.get("hostname", "Unknown"),
-                    "device_id": d.get("device_id", ""),
-                    "asset_tag": d.get("asset_tag", "N/A"),
-                    "latitude": float(latest["latitude"]),
-                    "longitude": float(latest["longitude"]),
-                    "accuracy": float(latest.get("accuracy_meters", 10.0)),
-                    "position_source": latest.get("position_source", "Wi-Fi Triangulation (WPS)"),
+                    "hostname": hostname,
+                    "device_id": dev_id,
+                    "asset_tag": asset_tag,
+                    "latitude": lat,
+                    "longitude": lon,
+                    "accuracy": accuracy,
+                    "position_source": pos_source,
                     "status": status_label,
                     "last_seen_str": format_relative_time(sec_ago),
-                    "received_at": str(latest.get("received_at", "")),
-                    "color": color,
+                    "received_at": str(rec_time or ""),
                 })
+        else:
+            # Latest device locations only
+            for d in active_devices:
+                latest = d.get("latest_report")
+                if latest and latest.get("latitude") is not None and latest.get("longitude") is not None:
+                    last_seen = latest.get("received_at") or d.get("last_seen_at")
+                    status_label, _, _, sec_ago = get_device_status_info(last_seen)
+                    pos_source = latest.get("position_source", "Wi-Fi Triangulation (WPS)")
+
+                    if status_filter != "All Statuses" and status_label != status_filter:
+                        continue
+                    if source_filter != "All Sources" and source_filter.lower() not in pos_source.lower():
+                        continue
+
+                    map_data.append({
+                        "hostname": d.get("hostname", "Unknown"),
+                        "device_id": d.get("device_id", ""),
+                        "asset_tag": d.get("asset_tag", "N/A"),
+                        "latitude": float(latest["latitude"]),
+                        "longitude": float(latest["longitude"]),
+                        "accuracy": float(latest.get("accuracy_meters", 10.0)),
+                        "position_source": pos_source,
+                        "status": status_label,
+                        "last_seen_str": format_relative_time(sec_ago),
+                        "received_at": str(latest.get("received_at", "")),
+                    })
 
         if map_data:
+            # Geolocation Subheader matching the user's reference screenshot
+            st.markdown(
+                f"""
+                <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 10px 16px; margin: 8px 0 14px 0; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                    <div>
+                        <span style="color: #f8fafc; font-size: 1.15rem; font-weight: 700; font-family: Inter, sans-serif;">
+                            📍 {len(map_data)} locations with public IP / Wi-Fi geolocation
+                        </span>
+                        <span style="color: #94a3b8; font-size: 0.85rem; margin-left: 14px;">
+                            Nearby coordinates clustered into badges &bull; Click cluster to zoom &bull; Click pin for telemetry
+                        </span>
+                    </div>
+                    <div>
+                        <span class="mono-text" style="font-size: 0.8rem; color: #38bdf8; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); padding: 4px 10px; border-radius: 6px;">
+                            ⚡ SOC Radar Active
+                        </span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
             if map_engine.startswith("🌍"):
                 st.markdown("##### 📍 Google Maps Live Interactive View")
                 dev_labels = [f"💻 {item['hostname']} ({item['asset_tag']}) — {item['status']}" for item in map_data]
@@ -690,7 +1037,7 @@ def render_realtime_dashboard():
                 t_param = "k" if "Satellite" in g_map_mode else "m"
                 google_embed_url = f"https://maps.google.com/maps?q={target_item['latitude']},{target_item['longitude']}&t={t_param}&z={map_zoom_level}&output=embed"
 
-                components.iframe(google_embed_url, height=520, scrolling=False)
+                components.iframe(google_embed_url, height=560, scrolling=False)
 
                 st.markdown(
                     f"""
@@ -706,13 +1053,21 @@ def render_realtime_dashboard():
                     unsafe_allow_html=True,
                 )
             else:
-                # OpenStreetMap Standard & High-Res Esri Satellite (Leaflet)
-                render_leaflet_fleet_map(map_data, height=520)
+                # OpenStreetMap Standard, Cyber Dark SOC Canvas & Satellite (Leaflet Clustered)
+                render_leaflet_fleet_map(map_data, height=560)
 
-            # Quick device card grid
+            # Quick device card grid (Latest active laptops)
             st.markdown("#### 📡 Real-Time Asset Roster")
-            cols = st.columns(min(len(map_data), 3) or 1)
-            for idx, item in enumerate(map_data):
+            seen_hosts = set()
+            unique_roster = []
+            for item in map_data:
+                h_key = item.get("device_id") or item.get("hostname")
+                if h_key not in seen_hosts:
+                    seen_hosts.add(h_key)
+                    unique_roster.append(item)
+
+            cols = st.columns(min(len(unique_roster), 3) or 1)
+            for idx, item in enumerate(unique_roster):
                 col = cols[idx % len(cols)]
                 with col:
                     status_dot = "live-dot" if item["status"] == "Live Online" else ("idle-dot" if item["status"] == "Recent" else "offline-dot")

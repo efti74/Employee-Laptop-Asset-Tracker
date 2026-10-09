@@ -206,13 +206,14 @@ def list_devices(authorization: Optional[str] = Header(default=None)):
 
 @app.get("/admin/reports")
 def report_history(
-    device_id: str,
-    limit: int = Query(default=100, ge=1, le=1000),
+    device_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=5000),
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(authorization)
+    query = {"device_id": device_id} if device_id else {}
     return list(reports.find(
-        {"device_id": device_id}, {"_id": 0}
+        query, {"_id": 0}
     ).sort("received_at", DESCENDING).limit(limit))
 
 
