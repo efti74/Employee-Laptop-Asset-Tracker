@@ -27,7 +27,7 @@ except Exception:
     WINSDK_AVAILABLE = False
 
 INTERVAL_SECONDS = int(os.getenv("REPORT_INTERVAL_SECONDS", "10"))
-DEFAULT_API_URL = os.getenv("API_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "http://127.0.0.1:8000"
+DEFAULT_API_URL = os.getenv("API_BASE_URL") or os.getenv("PUBLIC_BASE_URL") or "https://asset-tracker-backend-tqx7.onrender.com"
 
 logging.basicConfig(
     level=logging.INFO,
