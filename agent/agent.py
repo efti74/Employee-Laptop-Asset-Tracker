@@ -144,25 +144,24 @@ def _query_windows_geolocator_sync():
     try:
         access = loop.run_until_complete(Geolocator.request_access_async())
         if access != GeolocationAccessStatus.ALLOWED:
-            return None
+            raise PermissionError(
+                "Windows Location access is not allowed. "
+                "Please enable Settings -> Privacy & security -> Location on this PC."
+            )
 
         locator = Geolocator()
-        if hasattr(locator, "desired_accuracy"):
-            locator.desired_accuracy = PositionAccuracy.HIGH
-        locator.desired_accuracy_in_meters = 10
+        locator.desired_accuracy = PositionAccuracy.HIGH
+        locator.desired_accuracy_in_meters = 1
 
-        # Give Windows up to 12 seconds to perform Wi-Fi / cell scan
         pos = loop.run_until_complete(locator.get_geoposition_async())
         coord = pos.coordinate
         point = coord.point.position
         return {
             "latitude": float(point.latitude),
             "longitude": float(point.longitude),
-            "accuracy_meters": float(coord.accuracy or 50.0),
+            "accuracy_meters": float(coord.accuracy or 10.0),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-    except Exception as e:
-        return None
     finally:
         loop.close()
 
@@ -170,54 +169,22 @@ def _query_windows_geolocator_sync():
 def get_windows_location():
     """Query coordinates directly from Windows Built-in Location Service."""
     if not WINSDK_AVAILABLE:
-        return None
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_query_windows_geolocator_sync)
-            return future.result(timeout=14.0)
-    except Exception:
-        return None
-
-
-def get_ip_location():
-    """Fast fallback geolocation if Windows Location Service is toggled off."""
-    endpoints = [
-        ("http://ip-api.com/json", lambda r: (r.get("lat"), r.get("lon"))),
-        ("https://ipwho.is/", lambda r: (r.get("latitude"), r.get("longitude"))),
-        ("https://freeipapi.com/api/json", lambda r: (r.get("latitude"), r.get("longitude"))),
-    ]
-
-    for url, parser in endpoints:
-        try:
-            resp = requests.get(url, timeout=3.5, headers={"User-Agent": "OrgAssetAgent/1.0"})
-            if resp.status_code == 200:
-                data = resp.json()
-                lat, lon = parser(data)
-                if lat is not None and lon is not None:
-                    return {
-                        "latitude": float(lat),
-                        "longitude": float(lon),
-                        "accuracy_meters": 1000.0,
-                        "recorded_at": datetime.now(timezone.utc).isoformat(),
-                    }
-        except Exception:
-            continue
-    raise RuntimeError("Could not determine device location.")
+        raise RuntimeError("Windows Location SDK (winsdk) is not available on this machine.")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_query_windows_geolocator_sync)
+        return future.result(timeout=25.0)
 
 
 async def get_location():
-    """Get location directly from Windows Built-in Location Service, with fallback if disabled."""
-    # 1. Primary: Windows Built-in Location Service
+    """Exclusively obtain accurate location from the Windows Built-in Location Service."""
     win_loc = await asyncio.to_thread(get_windows_location)
-    if win_loc:
-        logging.info("Captured location from Windows Built-in Location Service (Accuracy: ±%.1fm)", win_loc["accuracy_meters"])
-        return win_loc
-
-    # 2. Fallback if Windows Location is turned off
-    logging.info("Windows Location Service unavailable; using network fallback...")
-    ip_loc = await asyncio.to_thread(get_ip_location)
-    logging.info("Captured location via network fallback (Lat: %.4f, Lon: %.4f)", ip_loc["latitude"], ip_loc["longitude"])
-    return ip_loc
+    logging.info(
+        "Captured accurate Windows Location: Lat: %.6f, Lon: %.6f (Accuracy: ±%.1fm)",
+        win_loc["latitude"],
+        win_loc["longitude"],
+        win_loc["accuracy_meters"],
+    )
+    return win_loc
 
 
 def send_report(cfg, location):
