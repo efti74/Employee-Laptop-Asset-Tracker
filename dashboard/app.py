@@ -360,19 +360,19 @@ def render_leaflet_fleet_map(devices_data: List[dict], height: int = 520):
     <body>
         <div id="fleet_map"></div>
         <script>
-            var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
                 maxZoom: 19,
                 subdomains: 'abcd',
                 attribution: '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO Dark Matter</a>'
-            });
-            var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            }});
+            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
                 maxZoom: 19,
                 attribution: '&copy; OpenStreetMap'
-            });
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            }});
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
                 maxZoom: 19,
                 attribution: '&copy; Esri World Imagery'
-            });
+            }});
 
             var map = L.map('fleet_map', {{
                 center: [{devices_data[0]['latitude']}, {devices_data[0]['longitude']}],
@@ -460,13 +460,13 @@ def render_leaflet_breadcrumb_map(df_hist: pd.DataFrame, hostname: str, height: 
     <body>
         <div id="bmap"></div>
         <script>
-            var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
                 maxZoom: 19,
                 subdomains: 'abcd',
                 attribution: '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO Dark Matter</a>'
-            });
-            var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' });
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: '&copy; Esri' });
+            }});
+            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }});
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{ maxZoom: 19, attribution: '&copy; Esri' }});
 
             var map = L.map('bmap', {{ center: [{lat_center}, {lon_center}], zoom: 16, layers: [cartoDark] }});
             L.control.layers({{ "🌙 CARTO Dark Matter (Cyber SOC)": cartoDark, "🗺️ Streets (OSM)": osm, "🛰️ Satellite (Esri)": satellite }}).addTo(map);
