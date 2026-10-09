@@ -669,7 +669,7 @@ def render_realtime_dashboard():
                 # Leaflet Multi-Layer (CARTO Dark, OSM, Satellite)
                 render_leaflet_fleet_map(map_data, height=520)
             else:
-                # PyDeck with CARTO Dark basemap (no Mapbox token required)
+                # PyDeck with CARTO Dark free vector basemap
                 df_map = pd.DataFrame(map_data)
                 avg_lat = df_map["latitude"].mean()
                 avg_lon = df_map["longitude"].mean()
