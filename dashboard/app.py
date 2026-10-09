@@ -360,30 +360,29 @@ def render_leaflet_fleet_map(devices_data: List[dict], height: int = 520):
     <body>
         <div id="fleet_map"></div>
         <script>
-            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-                maxZoom: 19,
-                subdomains: 'abcd',
-                attribution: '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO Dark Matter</a>'
-            }});
             var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
                 maxZoom: 19,
-                attribution: '&copy; OpenStreetMap'
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>'
             }});
             var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
                 maxZoom: 19,
                 attribution: '&copy; Esri World Imagery'
             }});
+            var osmHot = L.tileLayer('https://{{s}}.tile.openstreetmap.fr/hot/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors, Humanitarian style'
+            }});
 
             var map = L.map('fleet_map', {{
                 center: [{devices_data[0]['latitude']}, {devices_data[0]['longitude']}],
                 zoom: 15,
-                layers: [cartoDark]
+                layers: [osm]
             }});
 
             var baseMaps = {{
-                "🌙 CARTO Dark Matter (Cyber SOC)": cartoDark,
-                "🗺️ Street Map (OSM)": osm,
-                "🛰️ Satellite (Esri)": satellite
+                "🗺️ OpenStreetMap (Standard)": osm,
+                "🛰️ High-Res Satellite (Esri)": satellite,
+                "🏙️ Detailed Streets (OSM Hot)": osmHot
             }};
             L.control.layers(baseMaps).addTo(map);
 
@@ -460,16 +459,11 @@ def render_leaflet_breadcrumb_map(df_hist: pd.DataFrame, hostname: str, height: 
     <body>
         <div id="bmap"></div>
         <script>
-            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-                maxZoom: 19,
-                subdomains: 'abcd',
-                attribution: '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO Dark Matter</a>'
-            }});
-            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }});
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{ maxZoom: 19, attribution: '&copy; Esri' }});
+            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>' }});
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{ maxZoom: 19, attribution: '&copy; Esri World Imagery' }});
 
-            var map = L.map('bmap', {{ center: [{lat_center}, {lon_center}], zoom: 16, layers: [cartoDark] }});
-            L.control.layers({{ "🌙 CARTO Dark Matter (Cyber SOC)": cartoDark, "🗺️ Streets (OSM)": osm, "🛰️ Satellite (Esri)": satellite }}).addTo(map);
+            var map = L.map('bmap', {{ center: [{lat_center}, {lon_center}], zoom: 16, layers: [osm] }});
+            L.control.layers({{ "🗺️ Street Map (OSM)": osm, "🛰️ High-Res Satellite (Esri)": satellite }}).addTo(map);
 
             var rawPoints = {points_json};
             var latlngs = [];
@@ -540,8 +534,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("#### 🎯 Map Display Settings")
     map_engine = st.radio(
-        "Map Radar Style",
-        options=["✨ Interactive Leaflet (CARTO Dark Matter / OSM / Satellite)", "🌌 PyDeck Vector (CARTO Dark Matter)"],
+        "Map Display Radar",
+        options=[
+            "🌍 Google Maps Public Embed (Zero API Key • Satellite & Roads)",
+            "🛰️ Multi-Device Fleet Radar (OpenStreetMap & Satellite)",
+        ],
         index=0,
     )
     map_zoom_level = st.slider("Map Zoom Level", min_value=10, max_value=18, value=15)
@@ -670,53 +667,47 @@ def render_realtime_dashboard():
                 })
 
         if map_data:
-            if map_engine.startswith("✨"):
-                # Leaflet Multi-Layer (CARTO Dark, OSM, Satellite)
-                render_leaflet_fleet_map(map_data, height=520)
+            if map_engine.startswith("🌍"):
+                st.markdown("##### 📍 Google Maps Live Interactive View")
+                dev_labels = [f"💻 {item['hostname']} ({item['asset_tag']}) — {item['status']}" for item in map_data]
+                g_col1, g_col2 = st.columns([2, 1])
+                with g_col1:
+                    selected_idx = st.selectbox(
+                        "Focus Asset on Google Maps:",
+                        range(len(map_data)),
+                        format_func=lambda i: dev_labels[i],
+                        key="gmaps_focus_select",
+                    )
+                with g_col2:
+                    g_map_mode = st.radio(
+                        "Google Map View Layer:",
+                        options=["🗺️ Standard Streets", "🛰️ Satellite Photography"],
+                        horizontal=True,
+                        key="gmaps_mode_radio",
+                    )
+
+                target_item = map_data[selected_idx]
+                t_param = "k" if "Satellite" in g_map_mode else "m"
+                google_embed_url = f"https://maps.google.com/maps?q={target_item['latitude']},{target_item['longitude']}&t={t_param}&z={map_zoom_level}&output=embed"
+
+                components.iframe(google_embed_url, height=520, scrolling=False)
+
+                st.markdown(
+                    f"""
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                        <span style="color:#94a3b8; font-size:0.85rem;">
+                            Focused on <strong>{target_item['hostname']}</strong> at <code>{target_item['latitude']:.6f}, {target_item['longitude']:.6f}</code> &bull; Accuracy: ±{target_item['accuracy']:.1f}m &bull; Source: <code>{target_item['position_source']}</code>
+                        </span>
+                        <a href="https://www.google.com/maps?q={target_item['latitude']},{target_item['longitude']}" target="_blank" style="text-decoration:none;">
+                            <span style="color:#38bdf8; font-weight:600; font-size:0.85rem;">Open in Google Maps App / Website ↗</span>
+                        </a>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             else:
-                # PyDeck with CARTO Dark free vector basemap
-                df_map = pd.DataFrame(map_data)
-                avg_lat = df_map["latitude"].mean()
-                avg_lon = df_map["longitude"].mean()
-
-                scatter_layer = pdk.Layer(
-                    "ScatterplotLayer",
-                    data=df_map,
-                    get_position="[longitude, latitude]",
-                    get_fill_color="color",
-                    get_radius="accuracy if accuracy < 200 else 200",
-                    radius_min_pixels=8,
-                    radius_max_pixels=28,
-                    pickable=True,
-                    opacity=0.85,
-                    stroked=True,
-                    filled=True,
-                    get_line_color=[255, 255, 255, 200],
-                    line_width_min_pixels=2,
-                )
-
-                view_state = pdk.ViewState(
-                    latitude=avg_lat,
-                    longitude=avg_lon,
-                    zoom=map_zoom_level - 1,
-                    pitch=20,
-                )
-
-                deck = pdk.Deck(
-                    layers=[scatter_layer],
-                    initial_view_state=view_state,
-                    map_provider="carto",
-                    map_style="dark",
-                    tooltip={
-                        "html": "<b>Asset:</b> {hostname} ({asset_tag})<br/>"
-                                "<b>Status:</b> {status} ({last_seen_str})<br/>"
-                                "<b>Lat/Lon:</b> {latitude}, {longitude}<br/>"
-                                "<b>Accuracy:</b> ±{accuracy}m<br/>"
-                                "<b>Last Report:</b> {received_at}",
-                        "style": {"backgroundColor": "#0f172a", "color": "#f8fafc", "fontSize": "12px", "borderRadius": "8px", "padding": "8px"},
-                    },
-                )
-                st.pydeck_chart(deck, use_container_width=True)
+                # OpenStreetMap Standard & High-Res Esri Satellite (Leaflet)
+                render_leaflet_fleet_map(map_data, height=520)
 
             # Quick device card grid
             st.markdown("#### 📡 Real-Time Asset Roster")
@@ -918,50 +909,7 @@ def render_realtime_dashboard():
                 df_hist = df_hist.dropna(subset=["latitude", "longitude"]).sort_values(by="rec_dt", ascending=True).reset_index(drop=True)
 
                 if not df_hist.empty:
-                    if map_engine.startswith("✨"):
-                        render_leaflet_breadcrumb_map(df_hist, b_dev.get("hostname", "Asset"), height=500)
-                    else:
-                        path_coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in df_hist.iterrows()]
-                        path_data = [{"path": path_coords, "name": b_dev.get("hostname", "Asset")}]
-
-                        path_layer = pdk.Layer(
-                            "PathLayer",
-                            data=path_data,
-                            get_path="path",
-                            get_color=[56, 189, 248, 240],
-                            width_scale=20,
-                            width_min_pixels=3,
-                            pickable=True,
-                        )
-
-                        points_layer = pdk.Layer(
-                            "ScatterplotLayer",
-                            data=df_hist,
-                            get_position="[longitude, latitude]",
-                            get_fill_color=[16, 185, 129, 200],
-                            get_radius=15,
-                            radius_min_pixels=4,
-                            radius_max_pixels=12,
-                            pickable=True,
-                        )
-
-                        last_pt = path_coords[-1] if path_coords else [0, 0]
-                        view_st = pdk.ViewState(
-                            latitude=last_pt[1],
-                            longitude=last_pt[0],
-                            zoom=map_zoom_level,
-                            pitch=20,
-                        )
-
-                        b_deck = pdk.Deck(
-                            layers=[path_layer, points_layer],
-                            initial_view_state=view_st,
-                            map_provider="carto",
-                            map_style="dark",
-                            tooltip={"text": "Recorded At: {recorded_at}\nLat: {latitude}, Lon: {longitude}\nAccuracy: ±{accuracy_meters}m"},
-                        )
-
-                        st.pydeck_chart(b_deck, use_container_width=True)
+                    render_leaflet_breadcrumb_map(df_hist, b_dev.get("hostname", "Asset"), height=500)
                 else:
                     st.info("No valid GPS coordinate history recorded for this asset yet.")
 
