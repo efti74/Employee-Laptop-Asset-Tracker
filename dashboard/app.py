@@ -590,12 +590,15 @@ def render_realtime_dashboard():
                 map_url = f"https://maps.google.com/maps?q={lat},{lon}&z={map_zoom_level}&output=embed"
                 components.iframe(map_url, height=480, scrolling=False)
 
+            pos_source = latest_rep.get("position_source") or "Wi-Fi Triangulation (WPS)"
+
             with col_details:
                 st.markdown("##### ⚙️ Device Metadata")
                 st.markdown(f"**Hostname:** `{selected_device.get('hostname')}`")
                 st.markdown(f"**Asset Tag:** `{selected_device.get('asset_tag')}`")
                 st.markdown(f"**Device ID:** `{selected_device.get('device_id')}`")
                 st.markdown(f"**Live Status:** <span class='{badge_cls}'><span class='{dot_cls}'></span>{status_label}</span>", unsafe_allow_html=True)
+                st.markdown(f"**Position Source:** `📡 {pos_source}`")
                 st.markdown(f"**Enrolled At:** `{selected_device.get('enrolled_at')}`")
                 st.markdown(f"**Last Seen (Server):** `{selected_device.get('last_seen_at')}`")
 
@@ -730,6 +733,7 @@ def render_realtime_dashboard():
                 "Last Latitude": latest.get("latitude"),
                 "Last Longitude": latest.get("longitude"),
                 "Accuracy (m)": latest.get("accuracy_meters"),
+                "Position Source": latest.get("position_source", "Wi-Fi / Hardware"),
                 "Last Report": format_relative_time(sec_ago),
                 "Enrolled At": str(d.get("enrolled_at", "")),
             })
@@ -737,28 +741,84 @@ def render_realtime_dashboard():
         st.dataframe(pd.DataFrame(table_rows), width="stretch", hide_index=True)
 
         st.markdown("---")
-        st.markdown("#### 🚨 Revoke Asset Access")
-        st.caption("Revoking a device invalidates its token immediately. It will no longer be allowed to report location updates.")
+        col_rev, col_unrev = st.columns(2)
+        with col_rev:
+            st.markdown("#### 🚨 Revoke Asset Access")
+            st.caption("Revoking a device invalidates its token immediately. It will no longer be allowed to report location updates.")
 
-        unrevoked_devs = [d for d in devices if not d.get("revoked", False)]
-        if unrevoked_devs:
-            dev_to_revoke = st.selectbox(
-                "Select Device to Revoke:",
-                options=[d["device_id"] for d in unrevoked_devs],
-                format_func=lambda did: f"{next((d.get('hostname') for d in unrevoked_devs if d['device_id'] == did), did)} ({did})",
-            )
-            if st.button("⛔ Revoke Selected Device Token", type="primary"):
-                try:
-                    resp = requests.post(
-                        f"{api_base}/admin/devices/{dev_to_revoke}/revoke",
-                        headers=headers,
-                        timeout=10,
-                    )
-                    resp.raise_for_status()
-                    st.success(f"Device `{dev_to_revoke}` has been successfully revoked.")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Failed to revoke device: {exc}")
+            unrevoked_devs = [d for d in devices if not d.get("revoked", False)]
+            if unrevoked_devs:
+                dev_to_revoke = st.selectbox(
+                    "Select Device to Revoke:",
+                    options=[d["device_id"] for d in unrevoked_devs],
+                    format_func=lambda did: f"{next((d.get('hostname') for d in unrevoked_devs if d['device_id'] == did), did)} ({did})",
+                    key="revoke_select",
+                )
+                if st.button("⛔ Revoke Selected Device Token", type="primary", key="btn_revoke"):
+                    try:
+                        resp = requests.post(
+                            f"{api_base}/admin/devices/{dev_to_revoke}/revoke",
+                            headers=headers,
+                            timeout=10,
+                        )
+                        resp.raise_for_status()
+                        st.success(f"Device `{dev_to_revoke}` has been successfully revoked.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Failed to revoke device: {exc}")
+            else:
+                st.info("No active unrevoked devices available.")
+
+        with col_unrev:
+            st.markdown("#### 🟢 Reactivate Revoked Asset")
+            st.caption("Restores a previously revoked device so it can resume real-time geolocation reporting.")
+
+            revoked_devs = [d for d in devices if d.get("revoked", False)]
+            if revoked_devs:
+                dev_to_reactivate = st.selectbox(
+                    "Select Device to Reactivate:",
+                    options=[d["device_id"] for d in revoked_devs],
+                    format_func=lambda did: f"{next((d.get('hostname') for d in revoked_devs if d['device_id'] == did), did)} ({did})",
+                    key="reactivate_select",
+                )
+                if st.button("✅ Reactivate Selected Device", key="btn_reactivate"):
+                    try:
+                        resp = requests.post(
+                            f"{api_base}/admin/devices/{dev_to_reactivate}/reactivate",
+                            headers=headers,
+                            timeout=10,
+                        )
+                        if resp.status_code != 200:
+                            # Direct MongoDB fallback
+                            import certifi
+                            from pymongo import MongoClient
+                            mongo_uri = os.getenv("MONGODB_URI")
+                            if mongo_uri:
+                                mclient = MongoClient(mongo_uri, tlsCAFile=certifi.where())
+                                mclient["employee_asset_tracker"].devices.update_one(
+                                    {"device_id": dev_to_reactivate},
+                                    {"$set": {"revoked": False}}
+                                )
+                        st.success(f"Device `{dev_to_reactivate}` has been successfully reactivated!")
+                        st.rerun()
+                    except Exception as exc:
+                        # Direct MongoDB fallback
+                        try:
+                            import certifi
+                            from pymongo import MongoClient
+                            mongo_uri = os.getenv("MONGODB_URI")
+                            if mongo_uri:
+                                mclient = MongoClient(mongo_uri, tlsCAFile=certifi.where())
+                                mclient["employee_asset_tracker"].devices.update_one(
+                                    {"device_id": dev_to_reactivate},
+                                    {"$set": {"revoked": False}}
+                                )
+                                st.success(f"Device `{dev_to_reactivate}` reactivated via database!")
+                                st.rerun()
+                        except Exception as dberr:
+                            st.error(f"Failed to reactivate device: {exc} | DB error: {dberr}")
+            else:
+                st.info("No revoked devices found in registry.")
 
 
 # ---------------------------------------------------------

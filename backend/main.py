@@ -87,6 +87,7 @@ class LocationReport(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     accuracy_meters: float = Field(ge=0, le=1_000_000)
+    position_source: Optional[str] = Field(default="Windows Location", max_length=100)
     recorded_at: datetime
 
 
@@ -173,6 +174,7 @@ def ingest_report(payload: LocationReport, authorization: Optional[str] = Header
         "latitude": payload.latitude,
         "longitude": payload.longitude,
         "accuracy_meters": payload.accuracy_meters,
+        "position_source": payload.position_source or "Windows Location",
         "recorded_at": payload.recorded_at.astimezone(timezone.utc),
         "received_at": now,
     }
@@ -224,3 +226,19 @@ def revoke_device(device_id: str, authorization: Optional[str] = Header(default=
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Device not found")
     return {"status": "revoked", "device_id": device_id}
+
+
+@app.post("/admin/devices/{device_id}/reactivate")
+def reactivate_device(device_id: str, authorization: Optional[str] = Header(default=None)):
+    require_admin(authorization)
+    now = utcnow()
+    device_token = secrets.token_urlsafe(32)
+    new_token_hash = token_hash(device_token)
+    result = devices.update_one(
+        {"device_id": device_id},
+        {"$set": {"revoked": False, "token_hash": new_token_hash, "reactivated_at": now}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"status": "reactivated", "device_id": device_id, "device_token": device_token}
+

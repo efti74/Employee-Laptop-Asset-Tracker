@@ -163,10 +163,27 @@ def _query_windows_geolocator_sync():
         pos = loop.run_until_complete(locator.get_geoposition_async())
         coord = pos.coordinate
         point = coord.point.position
+
+        # Detect physical positioning technology used by Windows
+        raw_source = getattr(coord, "position_source", None)
+        source_map = {
+            0: "Cellular Tower Triangulation",
+            1: "Satellite GNSS/GPS",
+            2: "Wi-Fi Triangulation (Microsoft/Google WPS)",
+            3: "ISP Network IP (Coarse)",
+            4: "Windows Location Platform",
+            5: "Default Location Service",
+        }
+        if raw_source is not None:
+            source_label = source_map.get(int(raw_source), f"Windows Location ({raw_source})")
+        else:
+            source_label = "Wi-Fi / Hardware Geolocation"
+
         return {
             "latitude": float(point.latitude),
             "longitude": float(point.longitude),
             "accuracy_meters": float(coord.accuracy or 10.0),
+            "position_source": source_label,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
     finally:
@@ -233,6 +250,16 @@ async def main():
                 lat_ms,
                 result.get("received_at", "ok"),
             )
+        except requests.exceptions.HTTPError as http_err:
+            if http_err.response is not None and http_err.response.status_code in (401, 403):
+                logging.warning("[Sync #%04d] Device token rejected/revoked (%s). Attempting automatic re-enrollment...", seq, http_err)
+                try:
+                    cfg = auto_enroll_device(cfg.get("api_base_url") or DEFAULT_API_URL)
+                    logging.info("Auto-recovery SUCCESS! Re-enrolled as Device ID: %s", cfg["device_id"])
+                except Exception as enroll_err:
+                    logging.error("Auto-recovery re-enrollment failed: %s", enroll_err)
+            else:
+                logging.error("[Sync #%04d] HTTP error: %s", seq, http_err)
         except Exception as exc:
             logging.error("[Sync #%04d] Report cycle failed: %s", seq, exc)
 
