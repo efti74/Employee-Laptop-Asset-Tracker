@@ -63,7 +63,7 @@ for d in devices:
     })
 
 st.subheader("Devices")
-st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 selectable = [d for d in active_devices if d.get("latest_report")]
 if not selectable:
@@ -105,7 +105,7 @@ with st.expander("Location history"):
         )
         if history:
             history_df = pd.DataFrame(history)
-            st.dataframe(history_df, use_container_width=True, hide_index=True)
+            st.dataframe(history_df, width="stretch", hide_index=True)
         else:
             st.info("No history reports available.")
     except requests.RequestException as exc:

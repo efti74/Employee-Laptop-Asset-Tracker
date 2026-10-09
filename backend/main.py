@@ -4,6 +4,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
+import certifi
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -24,7 +25,10 @@ if len(ADMIN_TOKEN) < 32:
     raise RuntimeError("Set ADMIN_TOKEN to a random secret of at least 32 characters.")
 
 is_tls = "mongodb+srv://" in MONGODB_URI or "tls=true" in MONGODB_URI.lower() or "ssl=true" in MONGODB_URI.lower()
-client_kwargs = {"serverSelectionTimeoutMS": 8000}
+client_kwargs = {
+    "serverSelectionTimeoutMS": 10000,
+    "tlsCAFile": certifi.where()
+}
 if is_tls:
     client_kwargs["tls"] = True
 client = MongoClient(MONGODB_URI, **client_kwargs)
