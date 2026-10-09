@@ -360,18 +360,19 @@ def render_leaflet_fleet_map(devices_data: List[dict], height: int = 520):
     <body>
         <div id="fleet_map"></div>
         <script>
-            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+            var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
                 maxZoom: 19,
-                attribution: '&copy; CARTO'
-            }});
-            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                subdomains: 'abcd',
+                attribution: '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO Dark Matter</a>'
+            });
+            var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 maxZoom: 19,
                 attribution: '&copy; OpenStreetMap'
-            }});
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+            });
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
                 maxZoom: 19,
                 attribution: '&copy; Esri World Imagery'
-            }});
+            });
 
             var map = L.map('fleet_map', {{
                 center: [{devices_data[0]['latitude']}, {devices_data[0]['longitude']}],
@@ -380,7 +381,7 @@ def render_leaflet_fleet_map(devices_data: List[dict], height: int = 520):
             }});
 
             var baseMaps = {{
-                "🌙 Cyber Dark (CARTO)": cartoDark,
+                "🌙 CARTO Dark Matter (Cyber SOC)": cartoDark,
                 "🗺️ Street Map (OSM)": osm,
                 "🛰️ Satellite (Esri)": satellite
             }};
@@ -459,12 +460,16 @@ def render_leaflet_breadcrumb_map(df_hist: pd.DataFrame, hostname: str, height: 
     <body>
         <div id="bmap"></div>
         <script>
-            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{ maxZoom: 19, attribution: '&copy; CARTO' }});
-            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }});
-            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{ maxZoom: 19, attribution: '&copy; Esri' }});
+            var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                maxZoom: 19,
+                subdomains: 'abcd',
+                attribution: '&copy; <a href="https://carto.com/attributions" target="_blank">CARTO Dark Matter</a>'
+            });
+            var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' });
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: '&copy; Esri' });
 
             var map = L.map('bmap', {{ center: [{lat_center}, {lon_center}], zoom: 16, layers: [cartoDark] }});
-            L.control.layers({{ "🌙 Cyber Dark (CARTO)": cartoDark, "🗺️ Streets (OSM)": osm, "🛰️ Satellite (Esri)": satellite }}).addTo(map);
+            L.control.layers({{ "🌙 CARTO Dark Matter (Cyber SOC)": cartoDark, "🗺️ Streets (OSM)": osm, "🛰️ Satellite (Esri)": satellite }}).addTo(map);
 
             var rawPoints = {points_json};
             var latlngs = [];
@@ -536,7 +541,7 @@ with st.sidebar:
     st.markdown("#### 🎯 Map Display Settings")
     map_engine = st.radio(
         "Map Radar Style",
-        options=["✨ Interactive Multi-Layer (Dark / OSM / Satellite)", "🌌 PyDeck Vector (CARTO Dark)"],
+        options=["✨ Interactive Leaflet (CARTO Dark Matter / OSM / Satellite)", "🌌 PyDeck Vector (CARTO Dark Matter)"],
         index=0,
     )
     map_zoom_level = st.slider("Map Zoom Level", min_value=10, max_value=18, value=15)
@@ -700,7 +705,8 @@ def render_realtime_dashboard():
                 deck = pdk.Deck(
                     layers=[scatter_layer],
                     initial_view_state=view_state,
-                    map_style=pdk.map_styles.CARTO_DARK,
+                    map_provider="carto",
+                    map_style="dark",
                     tooltip={
                         "html": "<b>Asset:</b> {hostname} ({asset_tag})<br/>"
                                 "<b>Status:</b> {status} ({last_seen_str})<br/>"
@@ -950,7 +956,8 @@ def render_realtime_dashboard():
                         b_deck = pdk.Deck(
                             layers=[path_layer, points_layer],
                             initial_view_state=view_st,
-                            map_style=pdk.map_styles.CARTO_DARK,
+                            map_provider="carto",
+                            map_style="dark",
                             tooltip={"text": "Recorded At: {recorded_at}\nLat: {latitude}, Lon: {longitude}\nAccuracy: ±{accuracy_meters}m"},
                         )
 
