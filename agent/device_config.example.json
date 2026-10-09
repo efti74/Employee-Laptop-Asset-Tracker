@@ -1,0 +1,5 @@
+{
+  "api_base_url": "https://your-api.example.com",
+  "device_id": "dev_REPLACE_WITH_ENROLLMENT_ID",
+  "device_token": "REPLACE_WITH_ONE_TIME_DEVICE_TOKEN"
+}

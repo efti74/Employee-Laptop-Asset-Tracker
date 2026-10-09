@@ -1,0 +1,15 @@
+# Employee Laptop Asset Tracker - Unified Requirements
+# Backend
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+pymongo[srv]>=4.8,<5
+pydantic>=2.8,<3
+python-dotenv>=1.0.0
+
+# Agent (Windows)
+winsdk>=1.0.0b10
+requests>=2.32,<3
+
+# Dashboard
+streamlit>=1.38,<2
+pandas>=2.2,<3
