@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import time
@@ -218,7 +219,7 @@ def parse_iso_datetime(dt_val) -> Optional[datetime]:
 def get_device_status_info(last_seen_str: Optional[str]) -> Tuple[str, str, str, float]:
     """
     Returns (status_label, badge_class, dot_class, seconds_ago).
-    Online: reported < 30 seconds ago
+    Online: reported < 35 seconds ago
     Idle/Recent: reported < 5 minutes ago
     Offline: > 5 minutes ago or never
     """
@@ -230,9 +231,6 @@ def get_device_status_info(last_seen_str: Optional[str]) -> Tuple[str, str, str,
         return "Unknown", "status-badge-offline", "offline-dot", float("inf")
 
     now = datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-
     seconds_ago = max(0.0, (now - dt).total_seconds())
 
     if seconds_ago <= 35:
@@ -253,6 +251,261 @@ def format_relative_time(seconds: float) -> str:
     if seconds < 3600:
         return f"{int(seconds // 60)}m {int(seconds % 60)}s ago"
     return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m ago"
+
+
+# ---------------------------------------------------------
+# High-Tech Interactive Leaflet Map Generators
+# ---------------------------------------------------------
+def render_leaflet_fleet_map(devices_data: List[dict], height: int = 520):
+    """
+    Renders an interactive high-tech Leaflet map with OpenStreetMap,
+    Carto Dark, and Satellite basemaps, live pulsing markers, and accuracy circles.
+    """
+    if not devices_data:
+        st.warning("No coordinates available to plot on map.")
+        return
+
+    markers_js = []
+    for d in devices_data:
+        lat = d["latitude"]
+        lon = d["longitude"]
+        hostname = d["hostname"]
+        asset_tag = d["asset_tag"]
+        status = d["status"]
+        last_seen = d["last_seen_str"]
+        accuracy = d["accuracy"]
+        pos_source = d.get("position_source", "Wi-Fi Triangulation")
+
+        if status == "Live Online":
+            pin_color = "#10b981"
+        elif status == "Recent":
+            pin_color = "#f59e0b"
+        else:
+            pin_color = "#ef4444"
+
+        popup_html = f"""
+        <div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 190px; color: #0f172a;'>
+            <div style='font-weight: 700; font-size: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px;'>
+                💻 {hostname}
+            </div>
+            <div><b>Asset Tag:</b> {asset_tag}</div>
+            <div><b>Status:</b> <span style='color:{pin_color}; font-weight:600;'>{status}</span> ({last_seen})</div>
+            <div><b>Coordinates:</b> {lat:.6f}, {lon:.6f}</div>
+            <div><b>Accuracy:</b> ±{accuracy:.1f}m</div>
+            <div><b>Source:</b> {pos_source}</div>
+            <div style='margin-top: 8px;'>
+                <a href='https://www.google.com/maps?q={lat},{lon}' target='_blank' style='color:#0284c7; text-decoration:none; font-weight:600;'>Open in Google Maps ↗</a>
+            </div>
+        </div>
+        """
+
+        markers_js.append(f"""
+        (function() {{
+            var lat = {lat};
+            var lon = {lon};
+            var marker = L.circleMarker([lat, lon], {{
+                radius: 10,
+                fillColor: '{pin_color}',
+                color: '#ffffff',
+                weight: 2.5,
+                opacity: 1,
+                fillOpacity: 0.95
+            }}).addTo(map);
+
+            var circle = L.circle([lat, lon], {{
+                radius: {max(accuracy, 15.0)},
+                color: '{pin_color}',
+                weight: 1,
+                opacity: 0.7,
+                fillColor: '{pin_color}',
+                fillOpacity: 0.12
+            }}).addTo(map);
+
+            marker.bindPopup(`{popup_html}`);
+            bounds.push([lat, lon]);
+        }})();
+        """)
+
+    markers_script = "\n".join(markers_js)
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <style>
+            html, body, #fleet_map {{
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                background: #0f172a;
+                border-radius: 12px;
+            }}
+            .leaflet-popup-content-wrapper {{
+                border-radius: 8px;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+            }}
+            .leaflet-control-layers {{
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                font-family: sans-serif;
+                font-size: 12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="fleet_map"></div>
+        <script>
+            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+                maxZoom: 19,
+                attribution: '&copy; CARTO'
+            }});
+            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap'
+            }});
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+                maxZoom: 19,
+                attribution: '&copy; Esri World Imagery'
+            }});
+
+            var map = L.map('fleet_map', {{
+                center: [{devices_data[0]['latitude']}, {devices_data[0]['longitude']}],
+                zoom: 15,
+                layers: [cartoDark]
+            }});
+
+            var baseMaps = {{
+                "🌙 Cyber Dark (CARTO)": cartoDark,
+                "🗺️ Street Map (OSM)": osm,
+                "🛰️ Satellite (Esri)": satellite
+            }};
+            L.control.layers(baseMaps).addTo(map);
+
+            var bounds = [];
+            {markers_script}
+
+            if (bounds.length > 0) {{
+                if (bounds.length === 1) {{
+                    map.setView(bounds[0], 16);
+                }} else {{
+                    map.fitBounds(bounds, {{ padding: [50, 50], maxZoom: 16 }});
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_content, height=height, scrolling=False)
+
+
+def render_leaflet_breadcrumb_map(df_hist: pd.DataFrame, hostname: str, height: int = 500):
+    """
+    Renders historical waypoints with connected directional trajectory path on Leaflet.
+    """
+    if df_hist.empty:
+        return
+
+    points = []
+    for idx, row in df_hist.iterrows():
+        lat = float(row["latitude"])
+        lon = float(row["longitude"])
+        rec_time = str(row.get("rec_dt") or row.get("recorded_at") or "")
+        acc = float(row.get("accuracy_meters", 10.0))
+        points.append({
+            "idx": idx + 1,
+            "lat": lat,
+            "lon": lon,
+            "time": rec_time,
+            "accuracy": acc
+        })
+
+    points_json = json.dumps(points)
+    lat_center = points[-1]["lat"]
+    lon_center = points[-1]["lon"]
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <style>
+            html, body, #bmap {{
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                background: #0f172a;
+                border-radius: 12px;
+            }}
+            .leaflet-popup-content-wrapper {{
+                border-radius: 8px;
+                font-family: sans-serif;
+            }}
+            .leaflet-control-layers {{
+                border-radius: 8px;
+                font-family: sans-serif;
+                font-size: 12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="bmap"></div>
+        <script>
+            var cartoDark = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{ maxZoom: 19, attribution: '&copy; CARTO' }});
+            var osm = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 19, attribution: '&copy; OpenStreetMap' }});
+            var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{ maxZoom: 19, attribution: '&copy; Esri' }});
+
+            var map = L.map('bmap', {{ center: [{lat_center}, {lon_center}], zoom: 16, layers: [cartoDark] }});
+            L.control.layers({{ "🌙 Cyber Dark (CARTO)": cartoDark, "🗺️ Streets (OSM)": osm, "🛰️ Satellite (Esri)": satellite }}).addTo(map);
+
+            var rawPoints = {points_json};
+            var latlngs = [];
+
+            rawPoints.forEach(function(pt, i) {{
+                var isLatest = (i === rawPoints.length - 1);
+                var isFirst = (i === 0);
+                latlngs.push([pt.lat, pt.lon]);
+
+                var color = isLatest ? '#38bdf8' : (isFirst ? '#94a3b8' : '#10b981');
+                var radius = isLatest ? 10 : 6;
+
+                var marker = L.circleMarker([pt.lat, pt.lon], {{
+                    radius: radius,
+                    fillColor: color,
+                    color: '#ffffff',
+                    weight: isLatest ? 3 : 1.5,
+                    fillOpacity: 0.95
+                }}).addTo(map);
+
+                marker.bindPopup(`
+                    <div style='font-size:12px;'>
+                        <b>Waypoint #${{pt.idx}}</b> ${{isLatest ? '🟢 (Latest Fix)' : ''}}<br/>
+                        <b>Time:</b> ${{pt.time}}<br/>
+                        <b>Lat/Lon:</b> ${{pt.lat.toFixed(6)}}, ${{pt.lon.toFixed(6)}}<br/>
+                        <b>Accuracy:</b> ±${{pt.accuracy.toFixed(1)}}m
+                    </div>
+                `);
+            }});
+
+            if (latlngs.length > 1) {{
+                var polyline = L.polyline(latlngs, {{ color: '#0ea5e9', weight: 4, opacity: 0.85, dashArray: '6, 8' }}).addTo(map);
+                map.fitBounds(polyline.getBounds(), {{ padding: [40, 40], maxZoom: 17 }});
+            }} else if (latlngs.length === 1) {{
+                map.setView(latlngs[0], 16);
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=height, scrolling=False)
 
 
 # ---------------------------------------------------------
@@ -280,8 +533,12 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.markdown("#### 🎯 Display Settings")
-    show_accuracy_radius = st.checkbox("Show Accuracy Circles", value=True)
+    st.markdown("#### 🎯 Map Display Settings")
+    map_engine = st.radio(
+        "Map Radar Style",
+        options=["✨ Interactive Multi-Layer (Dark / OSM / Satellite)", "🌌 PyDeck Vector (CARTO Dark)"],
+        index=0,
+    )
     map_zoom_level = st.slider("Map Zoom Level", min_value=10, max_value=18, value=15)
 
     st.markdown("---")
@@ -354,7 +611,7 @@ def render_realtime_dashboard():
     # Top KPI Metrics Row
     kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     kpi1.metric("🖥️ Tracked Assets", total_devices)
-    kpi2.metric("🟢 Live Online (<30s)", online_count, delta=f"{online_count}/{total_devices} Active" if total_devices else None)
+    kpi2.metric("🟢 Live Online (<35s)", online_count, delta=f"{online_count}/{total_devices} Active" if total_devices else None)
     kpi3.metric("🟡 Recent (<5m)", idle_count)
     kpi4.metric("🔴 Offline", offline_count)
     kpi5.metric("⚡ Sync Cadence", f"{refresh_interval}s", delta="Real-Time")
@@ -400,6 +657,7 @@ def render_realtime_dashboard():
                     "latitude": float(latest["latitude"]),
                     "longitude": float(latest["longitude"]),
                     "accuracy": float(latest.get("accuracy_meters", 10.0)),
+                    "position_source": latest.get("position_source", "Wi-Fi Triangulation (WPS)"),
                     "status": status_label,
                     "last_seen_str": format_relative_time(sec_ago),
                     "received_at": str(latest.get("received_at", "")),
@@ -407,49 +665,52 @@ def render_realtime_dashboard():
                 })
 
         if map_data:
-            df_map = pd.DataFrame(map_data)
-            avg_lat = df_map["latitude"].mean()
-            avg_lon = df_map["longitude"].mean()
+            if map_engine.startswith("✨"):
+                # Leaflet Multi-Layer (CARTO Dark, OSM, Satellite)
+                render_leaflet_fleet_map(map_data, height=520)
+            else:
+                # PyDeck with CARTO Dark basemap (no Mapbox token required)
+                df_map = pd.DataFrame(map_data)
+                avg_lat = df_map["latitude"].mean()
+                avg_lon = df_map["longitude"].mean()
 
-            # PyDeck 3D Layer
-            scatter_layer = pdk.Layer(
-                "ScatterplotLayer",
-                data=df_map,
-                get_position="[longitude, latitude]",
-                get_fill_color="color",
-                get_radius="accuracy if accuracy < 200 else 200",
-                radius_min_pixels=8,
-                radius_max_pixels=28,
-                pickable=True,
-                opacity=0.85,
-                stroked=True,
-                filled=True,
-                get_line_color=[255, 255, 255, 200],
-                line_width_min_pixels=2,
-            )
+                scatter_layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=df_map,
+                    get_position="[longitude, latitude]",
+                    get_fill_color="color",
+                    get_radius="accuracy if accuracy < 200 else 200",
+                    radius_min_pixels=8,
+                    radius_max_pixels=28,
+                    pickable=True,
+                    opacity=0.85,
+                    stroked=True,
+                    filled=True,
+                    get_line_color=[255, 255, 255, 200],
+                    line_width_min_pixels=2,
+                )
 
-            view_state = pdk.ViewState(
-                latitude=avg_lat,
-                longitude=avg_lon,
-                zoom=map_zoom_level - 1,
-                pitch=30,
-            )
+                view_state = pdk.ViewState(
+                    latitude=avg_lat,
+                    longitude=avg_lon,
+                    zoom=map_zoom_level - 1,
+                    pitch=20,
+                )
 
-            deck = pdk.Deck(
-                layers=[scatter_layer],
-                initial_view_state=view_state,
-                map_style="mapbox://styles/mapbox/dark-v11",
-                tooltip={
-                    "html": "<b>Asset:</b> {hostname} ({asset_tag})<br/>"
-                            "<b>Status:</b> {status} ({last_seen_str})<br/>"
-                            "<b>Lat/Lon:</b> {latitude}, {longitude}<br/>"
-                            "<b>Accuracy:</b> ±{accuracy}m<br/>"
-                            "<b>Last Report:</b> {received_at}",
-                    "style": {"backgroundColor": "#0f172a", "color": "#f8fafc", "fontSize": "12px", "borderRadius": "8px", "padding": "8px"},
-                },
-            )
-
-            st.pydeck_chart(deck, use_container_width=True)
+                deck = pdk.Deck(
+                    layers=[scatter_layer],
+                    initial_view_state=view_state,
+                    map_style=pdk.map_styles.CARTO_DARK,
+                    tooltip={
+                        "html": "<b>Asset:</b> {hostname} ({asset_tag})<br/>"
+                                "<b>Status:</b> {status} ({last_seen_str})<br/>"
+                                "<b>Lat/Lon:</b> {latitude}, {longitude}<br/>"
+                                "<b>Accuracy:</b> ±{accuracy}m<br/>"
+                                "<b>Last Report:</b> {received_at}",
+                        "style": {"backgroundColor": "#0f172a", "color": "#f8fafc", "fontSize": "12px", "borderRadius": "8px", "padding": "8px"},
+                    },
+                )
+                st.pydeck_chart(deck, use_container_width=True)
 
             # Quick device card grid
             st.markdown("#### 📡 Real-Time Asset Roster")
@@ -585,12 +846,12 @@ def render_realtime_dashboard():
             # High-Precision Google Maps Embed & Satellite
             col_map, col_details = st.columns([2.2, 1])
 
+            pos_source = latest_rep.get("position_source") or "Wi-Fi Triangulation (WPS)"
+
             with col_map:
                 st.markdown("##### 📍 Live Satellite / Street Map Pinpoint")
                 map_url = f"https://maps.google.com/maps?q={lat},{lon}&z={map_zoom_level}&output=embed"
                 components.iframe(map_url, height=480, scrolling=False)
-
-            pos_source = latest_rep.get("position_source") or "Wi-Fi Triangulation (WPS)"
 
             with col_details:
                 st.markdown("##### ⚙️ Device Metadata")
@@ -651,47 +912,49 @@ def render_realtime_dashboard():
                 df_hist = df_hist.dropna(subset=["latitude", "longitude"]).sort_values(by="rec_dt", ascending=True).reset_index(drop=True)
 
                 if not df_hist.empty:
-                    # Coordinates list for path
-                    path_coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in df_hist.iterrows()]
-                    path_data = [{"path": path_coords, "name": b_dev.get("hostname", "Asset")}]
+                    if map_engine.startswith("✨"):
+                        render_leaflet_breadcrumb_map(df_hist, b_dev.get("hostname", "Asset"), height=500)
+                    else:
+                        path_coords = [[float(row["longitude"]), float(row["latitude"])] for _, row in df_hist.iterrows()]
+                        path_data = [{"path": path_coords, "name": b_dev.get("hostname", "Asset")}]
 
-                    path_layer = pdk.Layer(
-                        "PathLayer",
-                        data=path_data,
-                        get_path="path",
-                        get_color=[56, 189, 248, 240],
-                        width_scale=20,
-                        width_min_pixels=3,
-                        pickable=True,
-                    )
+                        path_layer = pdk.Layer(
+                            "PathLayer",
+                            data=path_data,
+                            get_path="path",
+                            get_color=[56, 189, 248, 240],
+                            width_scale=20,
+                            width_min_pixels=3,
+                            pickable=True,
+                        )
 
-                    points_layer = pdk.Layer(
-                        "ScatterplotLayer",
-                        data=df_hist,
-                        get_position="[longitude, latitude]",
-                        get_fill_color=[16, 185, 129, 200],
-                        get_radius=15,
-                        radius_min_pixels=4,
-                        radius_max_pixels=12,
-                        pickable=True,
-                    )
+                        points_layer = pdk.Layer(
+                            "ScatterplotLayer",
+                            data=df_hist,
+                            get_position="[longitude, latitude]",
+                            get_fill_color=[16, 185, 129, 200],
+                            get_radius=15,
+                            radius_min_pixels=4,
+                            radius_max_pixels=12,
+                            pickable=True,
+                        )
 
-                    last_pt = path_coords[-1] if path_coords else [0, 0]
-                    view_st = pdk.ViewState(
-                        latitude=last_pt[1],
-                        longitude=last_pt[0],
-                        zoom=map_zoom_level,
-                        pitch=20,
-                    )
+                        last_pt = path_coords[-1] if path_coords else [0, 0]
+                        view_st = pdk.ViewState(
+                            latitude=last_pt[1],
+                            longitude=last_pt[0],
+                            zoom=map_zoom_level,
+                            pitch=20,
+                        )
 
-                    b_deck = pdk.Deck(
-                        layers=[path_layer, points_layer],
-                        initial_view_state=view_st,
-                        map_style="mapbox://styles/mapbox/dark-v11",
-                        tooltip={"text": "Recorded At: {recorded_at}\nLat: {latitude}, Lon: {longitude}\nAccuracy: ±{accuracy_meters}m"},
-                    )
+                        b_deck = pdk.Deck(
+                            layers=[path_layer, points_layer],
+                            initial_view_state=view_st,
+                            map_style=pdk.map_styles.CARTO_DARK,
+                            tooltip={"text": "Recorded At: {recorded_at}\nLat: {latitude}, Lon: {longitude}\nAccuracy: ±{accuracy_meters}m"},
+                        )
 
-                    st.pydeck_chart(b_deck, use_container_width=True)
+                        st.pydeck_chart(b_deck, use_container_width=True)
                 else:
                     st.info("No valid GPS coordinate history recorded for this asset yet.")
 
