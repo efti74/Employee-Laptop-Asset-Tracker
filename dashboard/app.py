@@ -18,7 +18,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 st.set_page_config(
-    page_title="Asset Tracker SOC | Real-Time Monitor",
+    page_title="Windows Real Time Location Monitoring",
     page_icon="🛰️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -798,7 +798,7 @@ with st.sidebar:
     map_zoom_level = st.slider("Map Zoom Level", min_value=10, max_value=18, value=15)
 
     st.markdown("---")
-    st.caption("🛡️ **Employee Laptop Asset Tracker**\nEnterprise Security Operations\nZero-touch Windows Geolocation")
+    st.caption("🛡️ **Windows Real Time Location Monitoring**\nEnterprise Security Operations\nZero-touch Windows Geolocation")
 
 
 # ---------------------------------------------------------
