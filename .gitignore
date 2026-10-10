@@ -8,3 +8,4 @@ dist/
 agent/device_config.json
 backend/.env
 dashboard/.env
+tools/
