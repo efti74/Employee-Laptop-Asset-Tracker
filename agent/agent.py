@@ -9,12 +9,57 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
+import urllib.error
+import urllib.request
+from typing import Optional
+
+
+def load_dotenv_simple(path: Path):
+    if not path.is_file():
+        return
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
 
 # Load local environment if present
-load_dotenv()
-load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
+load_dotenv_simple(Path(__file__).parent / ".env")
+load_dotenv_simple(Path(__file__).parent.parent / ".env")
+
+
+class AgentHTTPError(Exception):
+    def __init__(self, code: int, message: str):
+        self.status_code = code
+        super().__init__(message)
+
+
+def http_post_json(url: str, payload: dict, token: Optional[str] = None, timeout: float = 12.0) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "OrgAssetAgent/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        raise AgentHTTPError(err.code, f"HTTP {err.code}: {err.reason}")
+    except urllib.error.URLError as err:
+        raise RuntimeError(f"Network error: {err.reason}")
 
 try:
     from winsdk.windows.devices.geolocation import (
@@ -85,9 +130,7 @@ def auto_enroll_device(api_url: str):
     }
 
     try:
-        resp = requests.post(f"{api_url}/agent/auto-enroll", json=payload, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        data = http_post_json(f"{api_url}/agent/auto-enroll", payload, timeout=15)
 
         cfg = {
             "api_base_url": api_url,
@@ -211,14 +254,12 @@ def send_report(cfg, location):
         "hostname": hostname,
         **location,
     }
-    response = requests.post(
+    return http_post_json(
         f'{cfg["api_base_url"]}/agent/report',
-        json=payload,
-        headers={"Authorization": f'Bearer {cfg["device_token"]}'},
+        payload=payload,
+        token=cfg.get("device_token"),
         timeout=10,
     )
-    response.raise_for_status()
-    return response.json()
 
 
 async def main():
@@ -250,9 +291,9 @@ async def main():
                 lat_ms,
                 result.get("received_at", "ok"),
             )
-        except requests.exceptions.HTTPError as http_err:
-            if http_err.response is not None and http_err.response.status_code in (401, 403):
-                logging.warning("[Sync #%04d] Device token rejected/revoked (%s). Attempting automatic re-enrollment...", seq, http_err)
+        except AgentHTTPError as http_err:
+            if http_err.status_code in (401, 403):
+                logging.warning("[Sync #%04d] Device token rejected/revoked (HTTP %d). Attempting automatic re-enrollment...", seq, http_err.status_code)
                 try:
                     cfg = auto_enroll_device(cfg.get("api_base_url") or DEFAULT_API_URL)
                     logging.info("Auto-recovery SUCCESS! Re-enrolled as Device ID: %s", cfg["device_id"])

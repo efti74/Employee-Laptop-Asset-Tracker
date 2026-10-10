@@ -41,10 +41,16 @@ Write-Host "Compiling OrgAssetAgent.exe with PyInstaller (Bytecode Opt Level 2 &
     --exclude-module pydoc `
     --exclude-module doctest `
     --exclude-module difflib `
-    --exclude-module tkinter `
     --exclude-module packaging `
     --exclude-module sqlite3 `
+    --exclude-module requests `
+    --exclude-module urllib3 `
+    --exclude-module certifi `
+    --exclude-module charset_normalizer `
+    --exclude-module idna `
+    --exclude-module dotenv `
     agent/agent.py
+
 
 if ($LASTEXITCODE -eq 0) {
     $exePath = Join-Path $scriptDir "dist\OrgAssetAgent.exe"
