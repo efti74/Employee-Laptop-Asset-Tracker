@@ -613,7 +613,7 @@ def render_leaflet_fleet_map(devices_data: List[dict], height: int = 560):
                         <div class="soc-row"><span class="soc-label">Ingested:</span> <span class="soc-val">${lastSeen}</span></div>
                     </div>
                     <div class="soc-popup-footer">
-                        <span style="font-size:10px; color:#64748b;">SecMindPro Radar</span>
+                        <span style="font-size:10px; color:#64748b;">Windows Real Time Location Monitoring</span>
                         <a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" class="soc-maps-link">
                             Open in Google Maps ↗
                         </a>
@@ -1397,7 +1397,7 @@ def render_realtime_dashboard():
 # ---------------------------------------------------------
 # Application Entry Point
 # ---------------------------------------------------------
-st.title("🛡️ SecMindPro Asset Radar")
+st.title("🛡️ Windows Real Time Location Monitoring")
 st.caption("Continuous Real-Time Geolocation & Endpoint Movement Tracking for Corporate Assets")
 
 # Render the self-updating real-time fragment
